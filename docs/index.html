@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Refresh / Content Opportunity Scoring — Capstone Report</title>
+<style>
+  :root { --fg:#1a1f24; --muted:#5b6672; --bg:#ffffff; --card:#f6f7f9; --accent:#6F4E7C; --border:#e2e5e9; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg:#e7eaee; --muted:#a0abb8; --bg:#14171a; --card:#1d2125; --accent:#c9a6e0; --border:#2a2f35; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 780px; margin: 0 auto; padding: 32px 20px 80px; }
+  header { margin-bottom: 28px; }
+  h1 { font-size: 1.7rem; margin: 0 0 8px; }
+  .meta { color: var(--muted); font-size: 0.92rem; }
+  .meta a { color: var(--accent); }
+  h2 { font-size: 1.25rem; margin-top: 2.2em; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  p { margin: 0.9em 0; }
+  code { background: var(--card); padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.9em; }
+  pre { background: var(--card); padding: 14px; border-radius: 8px; overflow-x:auto; border:1px solid var(--border); }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 0.88rem; }
+  th, td { border: 1px solid var(--border); padding: 6px 8px; text-align: right; }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2), th:nth-child(3), td:nth-child(3) { text-align: left; }
+  th { background: var(--card); }
+  .abstract { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; }
+  .chart { text-align: center; margin: 1.5em 0; }
+  .chart img { max-width: 100%; border-radius: 8px; border: 1px solid var(--border); }
+  footer { margin-top: 3em; padding-top: 1em; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem; }
+  footer a { color: var(--accent); }
+  ul { padding-left: 1.3em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>Refresh / Content Opportunity Scoring</h1>
+  <div class="meta">
+    Vignesh Kumar U &middot; FlyRank ML Internship capstone &middot; 2026-09-28 &middot;
+    <a href="https://github.com/viki22uied/ML">source repo</a>
+  </div>
+</header>
+
+<div class="abstract">
+<strong>Abstract.</strong> Which of thousands of existing content pages should an editor review
+first? This project builds a decline-risk / refresh-priority score for individual content items,
+using FlyRank's 30,000-row anonymized starter dataset (32 clients) plus, for the earlier modeling
+stage, a <code>month=2026-03</code> cut of the gated warehouse release. A five-feature Random
+Forest, evaluated on a client-grouped holdout (so no client's pages leak between train and test),
+separated review-worthy pages from healthy ones clearly better than a transparent hand-written
+baseline rule (warehouse-stage run: AUC 0.846 vs. 0.684; starter-dataset reference pipeline: AUC
+0.750 vs. 0.627 baseline). The output is a ranked, reason-coded action queue &mdash;
+decision-support for a human reviewer's prioritization, not an automated publishing or
+ranking-prediction system.
+</div>
+
+<h2>1. Problem framing</h2>
+<p><strong>Unit of analysis:</strong> one content item (page). <strong>Output:</strong> a
+decline-risk / refresh-priority score (0&ndash;1) plus human-readable reason codes (e.g.
+<code>stale_visible_page</code>, <code>low_ctr_visible_page</code>,
+<code>declining_with_demand</code>). <strong>Action a human takes:</strong> an editor reads the
+top of the ranked queue during a review cycle and decides whether to refresh, expand, or leave a
+page alone &mdash; the model never edits or publishes anything itself. <strong>Cost of a wrong
+call:</strong> a false positive wastes editorial time on a fine page; a false negative lets a
+genuinely declining, still-visible page keep losing traffic un-reviewed. Both costs are bounded
+and recoverable, which is why a precision-at-top-K framing fits better than a strict accuracy
+target. ML helps because the portfolio is too large (30,000+ pages) for manual triage, and a
+handful of simple, transparent signals (impressions, position, age, freshness) carry real,
+measurable signal about which pages are worth a look first.</p>
+
+<h2>2. Data</h2>
+<p><strong>Used:</strong> <code>data/raw/content_refresh_anonymized.csv</code> (30,000
+pseudonymized content items, 32 clients, trailing-90-day metrics) for the reference-pipeline
+stage; a <code>month=2026-03</code> cut of the gated Hugging Face warehouse release
+(<code>hf://datasets/FlyRank/internship-warehouse</code>) for the earlier modeling stage. Both
+are pseudonymized at the client/content level &mdash; no client names, URLs, or raw queries
+appear anywhere in the project.</p>
+<p><strong>Deliberately excluded:</strong> <code>trend_direction</code> and <code>trend_pct</code>
+are never features &mdash; the reference-pipeline label is derived directly from
+<code>trend_direction</code>, so including either would leak the answer into the inputs
+(re-confirmed clean in the validation-audit notebook). <code>client_id</code> /
+<code>content_id</code> are used only to group the train/test split, never as model features.
+<code>ctr_march</code> / <code>clk_march</code> were excluded from the warehouse-stage model for
+the same reason &mdash; they are the label's own inputs.</p>
+
+<h2>3. Methodology &amp; baseline</h2>
+<p>Two transparent, rule-based baselines were built and beaten fairly (same data, same split,
+same metric as the model that followed each one): a reference-pipeline weighted score
+(visibility + freshness + position-opportunity + depth-gap, no model &mdash; ROC AUC 0.627,
+Precision@50 0.240), and a warehouse-stage "estimated extra clicks if fixed" rule (ROC AUC 0.684,
+Precision@50 0.08). Both models are Random Forests (compared against Logistic Regression and a
+Decision Tree), evaluated with a client-grouped split throughout so no client's pages ever leak
+between train and test.</p>
+
+<h2>4. Results (model vs. baseline, honest split)</h2>
+<table>
+<thead><tr><th>Stage</th><th>Split</th><th>Model</th><th>AUC</th><th>AP</th><th>P@50</th><th>P@200</th></tr></thead>
+<tbody>
+<tr><td>Warehouse (ML-08)</td><td>client-grouped</td><td>Random Forest</td><td>0.846</td><td>0.787</td><td>0.98</td><td>0.965</td></tr>
+<tr><td>Warehouse (ML-08)</td><td>client-grouped</td><td>baseline rule</td><td>0.684</td><td>&mdash;</td><td>0.08</td><td>&mdash;</td></tr>
+<tr><td>Starter (reference pipeline)</td><td>client-holdout</td><td>Random Forest</td><td>0.750</td><td>0.618</td><td>0.740</td><td>&mdash;</td></tr>
+<tr><td>Starter (reference pipeline)</td><td>client-holdout</td><td>baseline rule</td><td>0.627</td><td>0.468</td><td>0.240</td><td>&mdash;</td></tr>
+<tr><td>Starter (before &mdash; naive split)</td><td>random (naive)</td><td>Random Forest</td><td>0.760</td><td>0.772</td><td>0.920</td><td>0.895</td></tr>
+<tr><td>Starter (after &mdash; honest split)</td><td>client-grouped</td><td>Random Forest</td><td>0.606</td><td>0.594</td><td>0.560</td><td>0.620</td></tr>
+</tbody>
+</table>
+<div class="chart">
+  <img src="capstone_auc_comparison.svg" alt="Bar chart comparing ROC AUC across model stages and split strategies">
+  <p style="color:var(--muted); font-size:0.85em;">The naive-split bar (0.76) sits well above the
+  honest client-grouped bar (0.61) on identical data and features &mdash; the gap is client
+  memorization, not real skill.</p>
+</div>
+<p>A naive random 75/25 split (no grouping, 31 clients leaking across train and test) scored AUC
+0.760 / Precision@50 0.92. The honest client-grouped split (zero client overlap) on the exact
+same data scored AUC 0.606 / Precision@50 0.56. The gap is itself the finding: a meaningful share
+of the naive split's apparent precision was the model recognizing clients it had already seen,
+not real discrimination.</p>
+
+<h2>5. Interpretation</h2>
+<p>In the warehouse-stage model, <code>imp_march</code> dominates feature importance (0.793)
+&mdash; directionally sensible, but a single feature carrying 79% of importance is a disclosed
+limitation, not a hidden one. In the reference-pipeline model, importance spreads more evenly
+across 10+ features (top: <code>days_with_impressions</code> 0.158), a healthier pattern by the
+"suspiciously perfect = probably leakage" heuristic. A negative result worth naming: the honest
+client-grouped split on the starter dataset (AUC 0.606) is barely better than a coin flip at
+ranking content across unseen clients &mdash; a caution against treating any single holdout
+number as precise on a 32-client dataset.</p>
+
+<h2>6. Limitations</h2>
+<ul>
+<li>Association, not causation &mdash; a high score describes resemblance to pages that already
+declined, not proof that a refresh will reverse the trend.</li>
+<li>Build-window bound; no time-forward (past &rarr; future) validation yet.</li>
+<li>Real split-to-split variance on a 32-client dataset (0.750 vs. 0.606 across two independent
+group splits).</li>
+<li>One global model, no client-specific tuning; may mis-rank an unusual client's content mix.</li>
+</ul>
+
+<h2>7. Recommendation</h2>
+<p>The ranked, reason-coded action queue supports a weekly/monthly editorial triage workflow: a
+reviewer reads from the top down, checks the attached reason codes against the live page, and
+decides whether to refresh, expand, or skip. The top-50 of the reference-pipeline queue shows a
+declining-label rate well above the portfolio base rate &mdash; the queue meaningfully
+concentrates review-worthy pages near the top. Confidence is moderate and scoped: this is
+decision-support for prioritization, not a guarantee that refreshing a flagged page recovers
+traffic, not a client-tuned model, and not validated outside the two builds analyzed here. A
+human review step and a no-go list for regulated/sensitive content are mandatory before any
+action.</p>
+
+<h2>8. Reproducibility</h2>
+<p>Random seed 42, fixed everywhere. From a fresh clone (starter-dataset stage, no gated access
+needed):</p>
+<pre><code>pip install -r requirements.txt
+python scripts/run_all.py
+jupyter nbconvert --to notebook --execute --inplace work/notebooks/w06_validation_audit.ipynb
+jupyter nbconvert --to notebook --execute --inplace work/notebooks/w07_action_playbook.ipynb
+</code></pre>
+<p>The warehouse-stage notebooks (<code>w04</code>, <code>w05</code>) additionally require an
+approved Hugging Face token for the gated warehouse release &mdash; not needed to reproduce
+sections 4&ndash;7 above, which run entirely on the always-available starter CSV. Receipts:
+<code>work/outputs/w06_split_comparison.json</code>,
+<code>work/outputs/w07_monitoring_snapshot.json</code>.</p>
+
+<footer>
+  Built on the FlyRank ML Internship dataset &mdash; <a href="https://flyrank.ai">flyrank.ai</a>.
+  Full report and notebooks: <a href="https://github.com/viki22uied/ML/blob/main/work/capstone_report.md">capstone_report.md</a>,
+  <a href="https://github.com/viki22uied/ML/tree/main/work/notebooks">work/notebooks/</a>.
+</footer>
+</div>
+</body>
+</html>
