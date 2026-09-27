@@ -1,0 +1,22 @@
+{
+  "before_random_split": {
+    "split": "before_random_split",
+    "auc": 0.7598,
+    "ap": 0.7716,
+    "p_at_50": 0.92,
+    "p_at_200": 0.895,
+    "train_rows": 22500,
+    "test_rows": 7500,
+    "client_overlap_train_test": 31
+  },
+  "after_client_grouped_split": {
+    "split": "after_client_grouped_split",
+    "auc": 0.6058,
+    "ap": 0.594,
+    "p_at_50": 0.56,
+    "p_at_200": 0.62,
+    "train_rows": 22885,
+    "test_rows": 7115,
+    "client_overlap_train_test": 0
+  }
+}
