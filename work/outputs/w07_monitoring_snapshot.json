@@ -1,0 +1,13 @@
+{
+  "n_rows": 30000,
+  "n_clients": 32,
+  "declining_label_rate": 0.5421,
+  "avg_content_age_days": 256.2,
+  "median_content_age_days": 236.0,
+  "avg_days_since_last_update": 46.1,
+  "content_type_mix": {
+    "keyword article": 0.9069,
+    "feedly article": 0.0699,
+    "comparison article": 0.0232
+  }
+}
