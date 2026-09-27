@@ -82,16 +82,19 @@ def execute_notebook(scratch_notebook):
         [sys.executable, "-m", "nbconvert",
          "--to", "notebook", "--execute", "--inplace", scratch_notebook],
     ]
-    last_stderr = ""
     for cmd in candidates:
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
         except FileNotFoundError:
+            # this candidate isn't installed/on PATH at all — try the next one
             continue
+        # the candidate ran (found and executed) — its result is final,
+        # whether pass or fail. Don't let a later fallback's unrelated
+        # "module not found" error clobber a real execution traceback.
         if result.returncode == 0:
             return True, None
-        last_stderr = result.stderr
-    return False, last_stderr[-4000:]
+        return False, result.stderr[-4000:]
+    return False, "Neither `jupyter nbconvert` nor `python -m nbconvert` is available."
 
 
 def extract_self_check(scratch_notebook):
@@ -194,8 +197,21 @@ def main():
         print("Executing on scratch copy (original file untouched)...")
         success, stderr_tail = execute_notebook(scratch_notebook)
         if not success:
-            print("\n[FAIL] Notebook execution errored. Traceback tail:\n")
-            print(stderr_tail)
+            # nbconvert's tracebacks are ANSI-colored; strip escape codes first
+            # so the error text is contiguous and easy to pattern-match.
+            plain = re.sub(r"\x1b\[[0-9;]*m", "", stderr_tail or "")
+            missing = re.search(
+                r"No such file or directory:\s*'([^']+)'",
+                plain,
+            )
+            if missing:
+                print(f"\n[FAIL] Missing dependency file: {missing.group(1)}")
+                print("       The notebook expects this file to already exist (usually written "
+                      "by an earlier weekly notebook/script). Generate it first, then re-run "
+                      "this check.")
+            else:
+                print("\n[FAIL] Notebook execution errored. Traceback tail:\n")
+                print(stderr_tail)
             sys.exit(1)
         ok("Notebook executed cleanly end-to-end.")
 
